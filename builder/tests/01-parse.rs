@@ -23,7 +23,7 @@
 
 use derive_builder::Builder;
 
-#[derive(Builder)]
+#[derive(Builder, Debug)]
 pub struct Command {
     executable: String,
     args: Vec<String>,
