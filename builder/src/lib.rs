@@ -10,14 +10,19 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let builder_name = format_ident!("{}Builder", ident);
     let builder_fields = builder_field(&input.data);
-    let builder_field_default = builder_field_default(&input.data);
+    let builder_fn = builder_fn(&input.data);
+
+    let default_builder_init =  builder_field_default(&input.data);
+    let default_builder = quote! {
+        #builder_name {
+           #default_builder_init
+        }
+    } ;
 
     let builder = quote! {
         impl #ident {
             fn builder() -> #builder_name {
-                #builder_name {
-                    #builder_field_default
-                }
+                #default_builder
             }
         }
 
@@ -26,7 +31,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
 
         impl #builder_name {
-
+            #builder_fn
         }
     };
 
@@ -62,6 +67,39 @@ fn builder_field(data: &Data) -> TokenStream {
         _ => unimplemented!(),
     }
 }
+
+fn builder_fn(data: &Data) -> TokenStream {
+    match *data {
+        Data::Struct(ref data) => {
+            match data.fields {
+                Fields::Named(ref fields) => {
+                    let recurse = fields.named.iter().map(|f| {
+                        if let Some(ident) = f.ident.as_ref() {
+                            let name = format_ident!("{}", ident);
+                            let file_type = &f.ty;
+                            quote_spanned! {f.span()=>
+                                pub fn #name(&mut self, val: #file_type) -> &mut Self {
+                                    self.#name = Some(val);
+                                    self
+                                }
+                            }
+                        } else {
+                            quote_spanned!{f.span() => {
+
+                            }}
+                        }
+                    });
+                    quote! {
+                        #(#recurse)*
+                    }
+                },
+                _ => unimplemented!(),
+            }
+        }
+        _ => unimplemented!(),
+    }
+}
+
 
 fn builder_field_default(data: &Data) -> TokenStream {
     match *data {
