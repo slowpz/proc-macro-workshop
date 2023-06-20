@@ -114,27 +114,15 @@ fn builder_fn(ident: &Ident, data: &Data) -> TokenStream {
             Fields::Named(ref fields) => {
                 let field_extract = fields.named.iter().map(|f| {
                     if let Some(name) = f.ident.as_ref() {
-                        let msg = format!("missing {}", name);
-
                         if is_option(&f.ty).is_some() {
                             quote_spanned! {f.span()=>
-                                let #name = self.#name.clone();
+                                 #name: self.#name.clone()
                             }
                         } else {
+                            let msg = format!("missing {}", name);
                             quote_spanned! {f.span()=>
-                                let #name = self.#name.clone().ok_or_else(|| #msg )?;
+                                 #name: self.#name.clone().ok_or_else(|| #msg )?
                             }
-                        }
-                    } else {
-                        quote_spanned! {f.span() => {
-                            unimplemented!("anyonymous filed is not support")
-                        }}
-                    }
-                });
-                let field_init = fields.named.iter().map(|f| {
-                    if let Some(ident) = f.ident.as_ref() {
-                        quote_spanned! {f.span()=>
-                            #ident,
                         }
                     } else {
                         quote_spanned! {f.span() => {
@@ -145,10 +133,8 @@ fn builder_fn(ident: &Ident, data: &Data) -> TokenStream {
                 quote! {
                     pub fn build(&mut self) -> Result<#ident, Box<dyn Error>> {
                         use std::error::Error;
-                        #(#field_extract)*
-
                         Ok(#ident {
-                            #(#field_init)*
+                            #(#field_extract,)*
                         })
                     }
                 }
