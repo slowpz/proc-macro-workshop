@@ -1,22 +1,26 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, spanned::Spanned, AngleBracketedGenericArguments, Data, DeriveInput, Fields,
-    GenericArgument, Path, PathArguments, Type, TypePath,
+    parse_macro_input, punctuated::Punctuated, spanned::Spanned, AngleBracketedGenericArguments,
+    Data, DeriveInput, Error, Expr, ExprLit, Fields, GenericArgument, Lit, Meta, Path,
+    PathArguments, Result, Token, Type, TypePath,
 };
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let ident = input.ident;
 
     let builder_name = format_ident!("{}Builder", ident);
-    let builder_fields = builder_field(&input.data);
-    let builder_setter = builder_setter(&input.data);
-    let builder_fn = builder_fn(&ident, &input.data);
+    let builder_fields =
+        builder_field(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
+    let builder_setter =
+        builder_setter(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
+    let builder_fn = builder_fn(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
 
-    let default_builder_init = builder_field_default(&input.data);
+    let default_builder_init =
+        builder_field_default(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
     let default_builder = quote! {
         #builder_name {
            #default_builder_init
@@ -45,158 +49,255 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     proc_macro::TokenStream::from(builder)
 }
 
-fn builder_field(data: &Data) -> TokenStream {
+fn builder_field(data: &Data, ident: &Ident) -> Result<TokenStream> {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
-                    if let Some(ident) = f.ident.as_ref() {
-                        let name = format_ident!("{}", ident);
-                        let file_type = match is_option(&f.ty) {
-                            Some(ty) => ty,
-                            None => &f.ty,
-                        };
+                    let ident = match f.ident.as_ref() {
+                        Some(ident) => ident,
+                        None => {
+                            return Error::new_spanned(ident, "anyonymous filed is not support")
+                                .into_compile_error()
+                        }
+                    };
+
+                    return if let Some(ty) = is_type(&f.ty, "Vec") {
                         quote_spanned! {f.span()=>
-                            #name : Option<#file_type>
+                            #ident : Vec<#ty>
                         }
                     } else {
-                        quote_spanned! {f.span() => {
-                            unimplemented!("anyonymous filed is not support")
-                        }}
-                    }
-                });
-                quote! {
-                    #(#recurse),*
-                }
-            }
-            _ => unimplemented!(),
-        },
-        _ => unimplemented!(),
-    }
-}
-
-fn builder_setter(data: &Data) -> TokenStream {
-    match *data {
-        Data::Struct(ref data) => match data.fields {
-            Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
-                    if let Some(ident) = f.ident.as_ref() {
-                        let name = format_ident!("{}", ident);
-                        let file_type = match is_option(&f.ty) {
+                        let ty = match is_type(&f.ty, "Option") {
                             Some(ty) => ty,
                             None => &f.ty,
                         };
                         quote_spanned! {f.span()=>
-                            pub fn #name(&mut self, val: #file_type) -> &mut Self {
-                                self.#name = Some(val);
+                            #ident : Option<#ty>
+                        }
+                    };
+                });
+                Ok(quote! {
+                    #(#recurse),*
+                })
+            }
+            _ => Err(Error::new_spanned(ident, "only support named field")),
+        },
+        _ => Err(Error::new_spanned(ident, "only support struct")),
+    }
+}
+fn builder_setter(data: &Data, ident: &Ident) -> Result<TokenStream> {
+    match *data {
+        Data::Struct(ref data) => match data.fields {
+            Fields::Named(ref fields) => {
+                let recurse = fields.named.iter().map(|f| {
+                    let ident = match f.ident.as_ref() {
+                        Some(ident) => ident,
+                        None => return Error::new_spanned(&f.ident, "anyonymous filed is not support")
+                                .into_compile_error()
+                    };
+                    if let Some(vec_component_ty) = is_type(&f.ty, "Vec") {
+                        return match builder_each_attr(f) {
+                            Ok(Some(builder_name)) => {
+                                return if ident == &builder_name {
+                                    quote_spanned! {f.span()=>
+                                        pub fn #ident(&mut self, val: #vec_component_ty) -> &mut Self {
+                                            self.#ident.push(val);
+                                            self
+                                        }
+                                    }
+                                } else {
+                                    let builder_ident = format_ident!("{}", builder_name);
+                                    quote_spanned! {f.span()=>
+                                        pub fn #ident(&mut self, val: Vec<#vec_component_ty>) -> &mut Self {
+                                            self.#ident = val;
+                                            self
+                                        }
+
+                                        pub fn #builder_ident(&mut self, val: #vec_component_ty) -> &mut Self {
+                                            self.#ident.push(val);
+                                            self
+                                        }
+                                    }
+                                }
+                            },
+                            Ok(None) =>quote_spanned! {f.span()=>
+                                pub fn #ident(&mut self, val: Vec<#vec_component_ty>) -> &mut Self {
+                                    self.#ident = val;
+                                    self
+                                }
+                            },
+                            Err(e) => return Error::into_compile_error(e),
+                        };
+                    } else {
+                        let file_type = match is_type(&f.ty, "Option") {
+                            Some(ty) => ty,
+                            None => &f.ty,
+                        };
+                        quote_spanned! {f.span()=>
+                            pub fn #ident(&mut self, val: #file_type) -> &mut Self {
+                                self.#ident = Some(val);
                                 self
                             }
                         }
-                    } else {
-                        quote_spanned! {f.span() => {
-                            unimplemented!("anyonymous filed is not support")
-                        }}
                     }
                 });
-                quote! {
+                Ok(quote! {
                     #(#recurse)*
-                }
+                })
             }
-            _ => unimplemented!(),
+            _ => Err(Error::new_spanned(ident, "only named filed support")),
         },
-        _ => unimplemented!(),
+        _ => Err(Error::new_spanned(ident, "onply support struct")),
     }
 }
 
-fn builder_fn(ident: &Ident, data: &Data) -> TokenStream {
+fn builder_each_attr(f: &syn::Field) -> Result<Option<String>> {
+    match is_type(&f.ty, "Vec") {
+        Some(_) => {}
+        None => return Ok(None),
+    };
+
+    let mut name = None;
+    for attr in &f.attrs {
+        if !attr.path().is_ident("builder") {
+            continue;
+        }
+
+        if name.is_some() {
+            return Err(Error::new_spanned(&f.ident, "too much builder attrs"));
+        }
+
+        let nested = attr.parse_args_with(Punctuated::<Meta, Token![=]>::parse_terminated);
+
+        match nested {
+            Ok(nested) => {
+                for meta in &nested {
+                    match meta {
+                        Meta::NameValue(name_value) => match &name_value.value {
+                            Expr::Lit(ExprLit { lit, .. }) => {
+                                if let Lit::Str(str) = lit {
+                                    name = Some(str.value());
+                                }
+                            }
+                            _ => return Err(syn::Error::new_spanned(&f.ident, "Unknow expr")),
+                        },
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                meta.path().get_ident(),
+                                "Unknow meta",
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                return Err(Error::new_spanned(
+                    &f.ident,
+                    format!("get filed attrs error:{}", err),
+                ));
+            }
+        }
+    }
+
+    Ok(name)
+}
+
+fn builder_fn(data: &Data, ident: &Ident) -> Result<TokenStream> {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
                 let field_extract = fields.named.iter().map(|f| {
-                    if let Some(name) = f.ident.as_ref() {
-                        if is_option(&f.ty).is_some() {
-                            quote_spanned! {f.span()=>
-                                 #name: self.#name.clone()
-                            }
-                        } else {
-                            let msg = format!("missing {}", name);
-                            quote_spanned! {f.span()=>
-                                 #name: self.#name.clone().ok_or_else(|| #msg )?
-                            }
+                    let ident = match f.ident.as_ref() {
+                        Some(ident) => ident,
+                        None => {
+                            return Error::new_spanned(ident, "anyonymous filed is not support")
+                                .into_compile_error()
+                        }
+                    };
+
+                    if is_type(&f.ty, "Option").is_some() || is_type(&f.ty, "Vec").is_some() {
+                        quote_spanned! {f.span()=>
+                             #ident: self.#ident.clone()
                         }
                     } else {
-                        quote_spanned! {f.span() => {
-                            unimplemented!("anyonymous filed is not support")
-                        }}
+                        let msg = format!("missing {}", ident);
+                        quote_spanned! {f.span()=>
+                             #ident: self.#ident.clone().ok_or_else(|| #msg )?
+                        }
                     }
                 });
-                quote! {
+                Ok(quote! {
                     pub fn build(&mut self) -> Result<#ident, Box<dyn Error>> {
                         use std::error::Error;
                         Ok(#ident {
                             #(#field_extract,)*
                         })
                     }
-                }
+                })
             }
-            _ => unimplemented!(),
+            _ => Err(Error::new_spanned(ident, "anyonymous filed is not support")),
         },
-        _ => unimplemented!(),
+        _ => Err(Error::new_spanned(ident, "only struct support")),
     }
 }
 
-fn builder_field_default(data: &Data) -> TokenStream {
+fn builder_field_default(data: &Data, ident: &Ident) -> Result<TokenStream> {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
                 let recurse = fields.named.iter().map(|f| {
-                    if let Some(ident) = f.ident.as_ref() {
-                        let name = format_ident!("{}", ident);
+                    let ident = match f.ident.as_ref() {
+                        Some(ident) => ident,
+                        None => {
+                            return Error::new_spanned(ident, "anyonymous filed is not support")
+                                .into_compile_error()
+                        }
+                    };
+
+                    if is_type(&f.ty, "Vec").is_some() {
                         quote_spanned! {f.span()=>
-                            #name : None
+                            #ident : Vec::new()
                         }
                     } else {
-                        quote_spanned! {f.span() => {
-                            unimplemented!("anyonymous filed is not support")
-                        }}
+                        quote_spanned! {f.span()=>
+                            #ident : None
+                        }
                     }
                 });
-                quote! {
+                Ok(quote! {
                     #(#recurse),*
-                }
+                })
             }
-            _ => unimplemented!(),
+            _ => Err(Error::new_spanned(ident, "anyonymous filed is not support")),
         },
-        _ => unimplemented!(),
+        _ => Err(Error::new_spanned(ident, "only struct support")),
     }
 }
 
-/// std::option::Option<T>
-fn is_option(ty: &Type) -> Option<&syn::Type> {
+fn is_type<'a>(ty: &'a Type, ty_str: &str) -> Option<&'a Type> {
     if let Type::Path(TypePath {
         path: Path { segments, .. },
         ..
     }) = ty
     {
-        if let Some(seg) = segments.last() {
-            if seg.ident == "Option" {
-                match &seg.arguments {
-                    PathArguments::AngleBracketed(AngleBracketedGenericArguments {
-                        args, ..
-                    }) => {
-                        if let Some(GenericArgument::Type(ty)) = args.first() {
-                            Some(ty)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
+        let seg = match segments.last() {
+            Some(seg) => seg,
+            None => return None,
+        };
+
+        if seg.ident != ty_str {
+            return None;
+        }
+
+        match &seg.arguments {
+            PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) => {
+                if let Some(GenericArgument::Type(ty)) = args.first() {
+                    Some(ty)
+                } else {
+                    None
                 }
-            } else {
-                None
             }
-        } else {
-            None
+            _ => None,
         }
     } else {
         None
