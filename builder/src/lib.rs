@@ -186,14 +186,33 @@ fn builder_each_attr(f: &syn::Field) -> Result<Option<String>> {
             Ok(nested) => {
                 for meta in &nested {
                     match meta {
-                        Meta::NameValue(name_value) => match &name_value.value {
-                            Expr::Lit(ExprLit { lit, .. }) => {
-                                if let Lit::Str(str) = lit {
-                                    name = Some(str.value());
+                        Meta::NameValue(name_value) => {
+                            if !name_value.path.is_ident("each") {
+                                return Err(syn::Error::new_spanned(
+                                    &attr.meta,
+                                    "expected `builder(each = \"...\")`",
+                                ));
+                            }
+
+                            match &name_value.value {
+                                Expr::Lit(ExprLit { lit, .. }) => {
+                                    if let Lit::Str(str) = lit {
+                                        name = Some(str.value());
+                                    } else {
+                                        return Err(syn::Error::new_spanned(
+                                            &attr.meta,
+                                            "expected `builder(each = \"...\")`",
+                                        ));
+                                    }
+                                }
+                                _ => {
+                                    return Err(syn::Error::new_spanned(
+                                        &attr.meta,
+                                        "expected `builder(each = \"...\")`",
+                                    ))
                                 }
                             }
-                            _ => return Err(syn::Error::new_spanned(&f.ident, "Unknow expr")),
-                        },
+                        }
                         _ => {
                             return Err(syn::Error::new_spanned(
                                 meta.path().get_ident(),
