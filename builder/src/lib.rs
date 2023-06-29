@@ -76,7 +76,7 @@ fn builder_field(data: &Data, ident: &Ident) -> Result<TokenStream> {
 
                     if let Some(ty) = is_type(&f.ty, "Vec") {
                         quote_spanned! {f.span()=>
-                            #ident : Vec<#ty>
+                            #ident : std::vec::Vec<#ty>
                         }
                     } else {
                         let ty = match is_type(&f.ty, "Option") {
@@ -84,7 +84,7 @@ fn builder_field(data: &Data, ident: &Ident) -> Result<TokenStream> {
                             None => &f.ty,
                         };
                         quote_spanned! {f.span()=>
-                            #ident : Option<#ty>
+                            #ident : std::option::Option<#ty>
                         }
                     }
                 });
@@ -121,7 +121,7 @@ fn builder_setter(data: &Data, ident: &Ident) -> Result<TokenStream> {
                                 } else {
                                     let builder_ident = format_ident!("{}", builder_name);
                                     quote_spanned! {f.span()=>
-                                        pub fn #ident(&mut self, val: Vec<#vec_component_ty>) -> &mut Self {
+                                        pub fn #ident(&mut self, val: std::vec::Vec<#vec_component_ty>) -> &mut Self {
                                             self.#ident = val;
                                             self
                                         }
@@ -148,7 +148,7 @@ fn builder_setter(data: &Data, ident: &Ident) -> Result<TokenStream> {
                         };
                         quote_spanned! {f.span()=>
                             pub fn #ident(&mut self, val: #file_type) -> &mut Self {
-                                self.#ident = Some(val);
+                                self.#ident = std::option::Option::Some(val);
                                 self
                             }
                         }
@@ -259,7 +259,7 @@ fn builder_fn(data: &Data, ident: &Ident) -> Result<TokenStream> {
                     }
                 });
                 Ok(quote! {
-                    pub fn build(&mut self) -> Result<#ident, Box<dyn Error>> {
+                    pub fn build(&mut self) -> std::result::Result<#ident, std::boxed::Box<dyn Error>> {
                         use std::error::Error;
                         Ok(#ident {
                             #(#field_extract,)*
@@ -288,11 +288,11 @@ fn builder_field_default(data: &Data, ident: &Ident) -> Result<TokenStream> {
 
                     if is_type(&f.ty, "Vec").is_some() {
                         quote_spanned! {f.span()=>
-                            #ident : Vec::new()
+                            #ident : std::vec::Vec::new()
                         }
                     } else {
                         quote_spanned! {f.span()=>
-                            #ident : None
+                            #ident : std::option::Option::None
                         }
                     }
                 });
