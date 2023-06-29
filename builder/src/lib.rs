@@ -12,15 +12,27 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let ident = input.ident;
 
-    let builder_name = format_ident!("{}Builder", ident);
-    let builder_fields =
-        builder_field(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
-    let builder_setter =
-        builder_setter(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
-    let builder_fn = builder_fn(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
+    let builder_fields = match builder_field(&input.data, &ident) {
+        Ok(field) => field,
+        Err(err) => return err.into_compile_error().into(),
+    };
 
-    let default_builder_init =
-        builder_field_default(&input.data, &ident).unwrap_or_else(Error::into_compile_error);
+    let builder_setter = match builder_setter(&input.data, &ident) {
+        Ok(setter) => setter,
+        Err(err) => return err.into_compile_error().into(),
+    };
+
+    let builder_fn = match builder_fn(&input.data, &ident) {
+        Ok(function) => function,
+        Err(err) => return err.into_compile_error().into(),
+    };
+
+    let default_builder_init = match builder_field_default(&input.data, &ident) {
+        Ok(default_fields) => default_fields,
+        Err(err) => return err.into_compile_error().into(),
+    };
+
+    let builder_name = format_ident!("{}Builder", ident);
     let default_builder = quote! {
         #builder_name {
            #default_builder_init
@@ -62,7 +74,7 @@ fn builder_field(data: &Data, ident: &Ident) -> Result<TokenStream> {
                         }
                     };
 
-                    return if let Some(ty) = is_type(&f.ty, "Vec") {
+                    if let Some(ty) = is_type(&f.ty, "Vec") {
                         quote_spanned! {f.span()=>
                             #ident : Vec<#ty>
                         }
@@ -74,8 +86,9 @@ fn builder_field(data: &Data, ident: &Ident) -> Result<TokenStream> {
                         quote_spanned! {f.span()=>
                             #ident : Option<#ty>
                         }
-                    };
+                    }
                 });
+
                 Ok(quote! {
                     #(#recurse),*
                 })
@@ -96,9 +109,9 @@ fn builder_setter(data: &Data, ident: &Ident) -> Result<TokenStream> {
                                 .into_compile_error()
                     };
                     if let Some(vec_component_ty) = is_type(&f.ty, "Vec") {
-                        return match builder_each_attr(f) {
+                        match builder_each_attr(f) {
                             Ok(Some(builder_name)) => {
-                                return if ident == &builder_name {
+                                if ident == &builder_name {
                                     quote_spanned! {f.span()=>
                                         pub fn #ident(&mut self, val: #vec_component_ty) -> &mut Self {
                                             self.#ident.push(val);
@@ -120,14 +133,14 @@ fn builder_setter(data: &Data, ident: &Ident) -> Result<TokenStream> {
                                     }
                                 }
                             },
-                            Ok(None) =>quote_spanned! {f.span()=>
+                            Ok(None) => quote_spanned! {f.span()=>
                                 pub fn #ident(&mut self, val: Vec<#vec_component_ty>) -> &mut Self {
                                     self.#ident = val;
                                     self
                                 }
                             },
-                            Err(e) => return Error::into_compile_error(e),
-                        };
+                            Err(e) => Error::into_compile_error(e),
+                        }
                     } else {
                         let file_type = match is_type(&f.ty, "Option") {
                             Some(ty) => ty,
@@ -275,31 +288,33 @@ fn builder_field_default(data: &Data, ident: &Ident) -> Result<TokenStream> {
 }
 
 fn is_type<'a>(ty: &'a Type, ty_str: &str) -> Option<&'a Type> {
-    if let Type::Path(TypePath {
+    let segments = if let Type::Path(TypePath {
         path: Path { segments, .. },
         ..
     }) = ty
     {
-        let seg = match segments.last() {
-            Some(seg) => seg,
-            None => return None,
-        };
-
-        if seg.ident != ty_str {
-            return None;
-        }
-
-        match &seg.arguments {
-            PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) => {
-                if let Some(GenericArgument::Type(ty)) = args.first() {
-                    Some(ty)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+        segments
     } else {
-        None
+        return None;
+    };
+
+    let seg = match segments.last() {
+        Some(seg) => seg,
+        None => return None,
+    };
+
+    if seg.ident != ty_str {
+        return None;
+    }
+
+    match &seg.arguments {
+        PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) => {
+            if let Some(GenericArgument::Type(ty)) = args.first() {
+                Some(ty)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
