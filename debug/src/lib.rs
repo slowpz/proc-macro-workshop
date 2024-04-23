@@ -35,7 +35,7 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
     } else {
         return Err(syn::Error::new_spanned(ident, "Expect struct"));
     };
-
+    let vec = vec![123];
     let fields = match struct_data.fields {
         Fields::Named(ref fields) => {
             let recurse = fields.named.iter().map(|f| {
