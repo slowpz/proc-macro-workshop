@@ -2,8 +2,9 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use std::{result::Result, vec};
 use syn::{
-    parse_macro_input, parse_quote, AngleBracketedGenericArguments, Data, DeriveInput, Error,
-    Fields, GenericArgument, GenericParam, Generics, Path, PathArguments, Type, TypePath,
+    parse_macro_input, parse_quote, AngleBracketedGenericArguments, Data, DataStruct, DeriveInput,
+    Error, Fields, GenericArgument, GenericParam, Generics, Path, PathArguments, Type, TypePath,
+    WherePredicate,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -35,19 +36,32 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
     } else {
         return Err(syn::Error::new_spanned(ident, "Expect struct"));
     };
-    let fields = match struct_data.fields {
+    let fields = fields(struct_data);
+
+    //let phantom_types = type_bounds_handle(&struct_data);
+    let generics = add_trait_bounds(struct_data, data.generics);
+    let (impl_generics, ty_genrics, where_clause) = generics.split_for_impl();
+
+    let ident_name = ident.to_string();
+    Ok(quote! {
+        impl #impl_generics std::fmt::Debug for #ident #ty_genrics #where_clause {
+            fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                fmt.debug_struct(#ident_name)
+                #(.#fields)*
+                .finish()
+            }
+        }
+    })
+}
+
+fn fields(struct_data: &DataStruct) -> Vec<TokenStream> {
+    match struct_data.fields {
         Fields::Named(ref fields) => {
             let mut results = vec![];
             for f in &fields.named {
                 let ident = match f.ident.as_ref() {
                     Some(ident) => ident,
-                    None => {
-                        results.push(
-                            Error::new_spanned(ident, "anyonymous filed is not support")
-                                .into_compile_error(),
-                        );
-                        continue;
-                    }
+                    None => continue,
                 };
 
                 let ident_name = ident.to_string();
@@ -67,54 +81,73 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
             results
         }
         _ => vec![],
-    };
-
-    let phantom_types = phantom_types(&data);
-    let generics = add_trait_bounds(data.generics, phantom_types);
-    let (impl_generics, ty_genrics, where_clause) = generics.split_for_impl();
-
-    let ident_name = ident.to_string();
-    Ok(quote! {
-        impl #impl_generics std::fmt::Debug for #ident #ty_genrics #where_clause {
-            fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                fmt.debug_struct(#ident_name)
-                #(.#fields)*
-                .finish()
-            }
-        }
-    })
+    }
 }
 
-fn phantom_types(data: &DeriveInput) -> Vec<Ident> {
-    let struct_data = if let Data::Struct(st) = &data.data {
-        st
-    } else {
-        return vec![];
-    };
-
+fn type_bounds_handle(struct_data: &DataStruct) -> (Vec<Ident>, Vec<WherePredicate>) {
+    let mut handled = vec![];
     let mut types = vec![];
     for field in &struct_data.fields {
         let ty = &field.ty;
         if let Some(ty) = is_type(ty, "PhantomData") {
             match ty {
-                Type::Path(path) => {
-                    if let Some(ident) = path.path.get_ident() {
-                        types.push(ident.clone());
+                Type::Path(type_path) => {
+                    if let Some(ident) = type_path.path.get_ident() {
+                        handled.push(ident.clone());
+                        types.push(parse_quote!(std::marker::PhantomData<#ident>: std::fmt::Debug));
                     }
                 }
                 Type::Reference(reference) => {
                     if let Type::Path(path) = reference.elem.as_ref() {
                         if let Some(ident) = path.path.get_ident() {
-                            types.push(ident.clone());
+                            handled.push(ident.clone());
+                            types.push(
+                                parse_quote!(std::marker::PhantomData<#ident>: std::fmt::Debug),
+                            );
                         }
                     }
                 }
                 _ => {}
             };
+        } else if let Type::Path(type_path) = ty {
+            // handle associated-type
+            //Vec<T::Value>: std::fmt::Debug
+            //types.push(parse_quote!(#type_path: std::fmt::Debug));
+            // Wrong
+            //types.push(parse_quote!(#type_path.path: std::fmt::Debug));
+            for se in &type_path.path.segments {
+                let generics = match &se.arguments {
+                    PathArguments::AngleBracketed(generics) => generics,
+                    _ => continue,
+                };
+                for generic in &generics.args {
+                    let type_path = match generic {
+                        GenericArgument::Type(Type::Path(type_path)) => {
+                            // You can identify associated types as any syn::TypePath in which the first
+                            // path segment is one of the type parameters and there is more than one
+                            // segment.
+                            if type_path.path.segments.len() < 2 {
+                                continue;
+                            } else {
+                                type_path
+                            }
+                        }
+                        _ => continue,
+                    };
+
+                    match type_path.path.segments.first().map(|se| se.ident.clone()) {
+                        Some(ident) => {
+                            handled.push(ident);
+                            types.push(parse_quote!(#type_path: std::fmt::Debug));
+                        }
+                        _ => continue,
+                    };
+                }
+            }
         }
     }
 
-    types
+    (handled, types)
 }
 
 fn debug_fmt(f: &syn::Field) -> syn::Result<Option<String>> {
@@ -152,21 +185,28 @@ fn debug_fmt(f: &syn::Field) -> syn::Result<Option<String>> {
     Ok(name)
 }
 
-// Add a bound `T: HeapSize` to every type parameter T.
-fn add_trait_bounds(mut generics: Generics, phantom_types: Vec<Ident>) -> Generics {
-    let mut phantoms = vec![];
+// Add a bound `T: Debug` to every type parameter T.
+
+fn add_trait_bounds(struct_data: &DataStruct, mut generics: Generics) -> Generics {
+    let (handled, filed_type_bound) = type_bounds_handle(struct_data);
     for param in &mut generics.params {
-        if let GenericParam::Type(ref mut type_param) = *param {
-            let ident = &type_param.ident;
-            if phantom_types.contains(ident) {
-                phantoms.push(parse_quote!(std::marker::PhantomData<#ident>: std::fmt::Debug));
-            } else {
-                type_param.bounds.push(parse_quote!(std::fmt::Debug));
-            }
+        let type_param = if let GenericParam::Type(ref mut type_param) = *param {
+            type_param
+            //确保T本身实现std::fmt::Debug
+            // type_param.bounds.push(parse_quote!(std::fmt::Debug));
+        } else {
+            continue;
+        };
+
+        if handled.contains(&type_param.ident) {
+            continue;
         }
+
+        type_param.bounds.push(parse_quote!(std::fmt::Debug));
     }
+
     let where_clause = generics.make_where_clause();
-    for ident in phantoms {
+    for ident in filed_type_bound {
         where_clause.predicates.push(ident)
     }
     generics
