@@ -35,21 +35,24 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
     } else {
         return Err(syn::Error::new_spanned(ident, "Expect struct"));
     };
-    let vec = vec![123];
     let fields = match struct_data.fields {
         Fields::Named(ref fields) => {
-            let recurse = fields.named.iter().map(|f| {
+            let mut results = vec![];
+            for f in &fields.named {
                 let ident = match f.ident.as_ref() {
                     Some(ident) => ident,
                     None => {
-                        return Error::new_spanned(ident, "anyonymous filed is not support")
-                            .into_compile_error()
+                        results.push(
+                            Error::new_spanned(ident, "anyonymous filed is not support")
+                                .into_compile_error(),
+                        );
+                        continue;
                     }
                 };
 
                 let ident_name = ident.to_string();
 
-                match debug_fmt(f) {
+                let token_stream = match debug_fmt(f) {
                     Ok(Some(str)) => quote!(
                         field(#ident_name, &std::format_args!(#str, &self.#ident))
                     ),
@@ -57,12 +60,13 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
                         field(#ident_name, &self.#ident)
                     ),
                     Err(e) => e.into_compile_error(),
-                }
-            });
+                };
 
-            recurse
+                results.push(token_stream);
+            }
+            results
         }
-        _ => return Err(Error::new_spanned(ident, "only support named field")),
+        _ => vec![],
     };
 
     let phantom_types = phantom_types(&data);
@@ -168,6 +172,7 @@ fn add_trait_bounds(mut generics: Generics, phantom_types: Vec<Ident>) -> Generi
     generics
 }
 
+//应该使用全路径的。。。
 fn is_type<'a>(ty: &'a Type, ty_str: &str) -> Option<&'a Type> {
     let segments = if let Type::Path(TypePath {
         path: Path { segments, .. },

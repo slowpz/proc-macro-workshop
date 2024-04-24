@@ -20,15 +20,24 @@
 //     node: https://docs.rs/syn/1.0/syn/struct.TypePath.html
 
 use derive_debug::CustomDebug;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
 pub trait Trait {
     type Value;
 }
 
+//我要自动推导，如果T实现了Debug，我也要自动实现Debug。或者只有当T实现了Debug的时候，我才能实现为Field实现Debug
 #[derive(CustomDebug)]
+struct A;
+
 pub struct Field<T: Trait> {
     values: Vec<T::Value>,
+}
+
+impl <T: Trait> Debug for Field<T> where T::Value: Debug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Field").field("values", &self.values).finish()
+    }
 }
 
 fn assert_debug<F: Debug>() {}
