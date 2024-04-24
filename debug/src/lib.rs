@@ -2,9 +2,9 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use std::{result::Result, vec};
 use syn::{
-    parse_macro_input, parse_quote, AngleBracketedGenericArguments, Data, DataStruct, DeriveInput,
-    Error, Fields, GenericArgument, GenericParam, Generics, Path, PathArguments, Type, TypePath,
-    WherePredicate,
+    parse_macro_input, parse_quote, AngleBracketedGenericArguments, Attribute, Data, DataStruct,
+    DeriveInput, Error, Fields, GenericArgument, GenericParam, Generics, Lit, MetaNameValue, Path,
+    PathArguments, Type, TypePath, WherePredicate,
 };
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
@@ -39,7 +39,7 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
     let fields = fields(struct_data);
 
     //let phantom_types = type_bounds_handle(&struct_data);
-    let generics = add_trait_bounds(struct_data, data.generics);
+    let generics = add_trait_bounds(struct_data, data.generics, &data.attrs);
     let (impl_generics, ty_genrics, where_clause) = generics.split_for_impl();
 
     let ident_name = ident.to_string();
@@ -52,6 +52,43 @@ fn debug_impl(data: DeriveInput) -> Result<TokenStream, Error> {
             }
         }
     })
+}
+
+fn scape_hatch(attrs: &[Attribute]) -> Result<Option<String>, Error> {
+    let attr = match attrs.last() {
+        Some(attr) => attr,
+        None => return Ok(None),
+    };
+
+    let meta_list = match &attr.meta {
+        syn::Meta::List(list) => list,
+        _ => return Ok(None),
+    };
+
+    match syn::parse2::<MetaNameValue>(meta_list.tokens.clone()) {
+        Ok(name_value) => {
+            if !name_value.path.is_ident("bound") {
+                return Err(syn::Error::new_spanned(
+                    name_value.path,
+                    "unknow attr name ",
+                ));
+            }
+
+            let explit = match name_value.value {
+                syn::Expr::Lit(lit) => lit,
+                _ => return Ok(None),
+            };
+
+            match explit.lit {
+                Lit::Str(str) => Ok(Some(str.value())),
+                _ => Ok(None),
+            }
+        }
+        Err(e) => Err(syn::Error::new_spanned(
+            meta_list,
+            format!("parse bound attr error:{:?}", e),
+        )),
+    }
 }
 
 fn fields(struct_data: &DataStruct) -> Vec<TokenStream> {
@@ -187,28 +224,41 @@ fn debug_fmt(f: &syn::Field) -> syn::Result<Option<String>> {
 
 // Add a bound `T: Debug` to every type parameter T.
 
-fn add_trait_bounds(struct_data: &DataStruct, mut generics: Generics) -> Generics {
-    let (handled, filed_type_bound) = type_bounds_handle(struct_data);
-    for param in &mut generics.params {
-        let type_param = if let GenericParam::Type(ref mut type_param) = *param {
-            type_param
-            //确保T本身实现std::fmt::Debug
-            // type_param.bounds.push(parse_quote!(std::fmt::Debug));
-        } else {
-            continue;
-        };
+fn add_trait_bounds(
+    struct_data: &DataStruct,
+    mut generics: Generics,
+    attrs: &[Attribute],
+) -> Generics {
+    if let Ok(Some(lit)) = scape_hatch(attrs) {
+        match syn::parse_str(lit.to_string().as_str()) {
+            Ok(where_predicated) => {
+                let where_clause = generics.make_where_clause();
+                where_clause.predicates.push(where_predicated);
+            }
+            Err(err) => eprintln!("parse where_predicated error:{:?}", err),
+        }
+    } else {
+        let (handled, filed_type_bound) = type_bounds_handle(struct_data);
+        for param in &mut generics.params {
+            let type_param = if let GenericParam::Type(ref mut type_param) = *param {
+                type_param
+            } else {
+                continue;
+            };
 
-        if handled.contains(&type_param.ident) {
-            continue;
+            if handled.contains(&type_param.ident) {
+                continue;
+            }
+
+            type_param.bounds.push(parse_quote!(std::fmt::Debug));
         }
 
-        type_param.bounds.push(parse_quote!(std::fmt::Debug));
+        let where_clause = generics.make_where_clause();
+        for ident in filed_type_bound {
+            where_clause.predicates.push(ident)
+        }
     }
 
-    let where_clause = generics.make_where_clause();
-    for ident in filed_type_bound {
-        where_clause.predicates.push(ident)
-    }
     generics
 }
 
