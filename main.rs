@@ -1,58 +1,23 @@
-// There are some cases where no heuristic would be sufficient to infer the
-// right trait bounds based only on the information available during macro
-// expansion.
+// Now construct the generated code! Produce the output TokenStream by repeating
+// the loop body the correct number of times as specified by the loop bounds and
+// replacing the specified identifier with the loop counter.
 //
-// When this happens, we'll turn to attributes as a way for the caller to
-// handwrite the correct trait bounds themselves.
+// The invocation below will need to expand to a TokenStream containing:
 //
-// The impl for Wrapper<T> in the code below will need to include the bounds
-// provided in the `debug(bound = "...")` attribute. When such an attribute is
-// present, also disable all inference of bounds so that the macro does not
-// attach its own `T: Debug` inferred bound.
+//     compile_error!(concat!("error number ", stringify!(0)));
+//     compile_error!(concat!("error number ", stringify!(1)));
+//     compile_error!(concat!("error number ", stringify!(2)));
+//     compile_error!(concat!("error number ", stringify!(3)));
 //
-//     impl<T: Trait> Debug for Wrapper<T>
-//     where
-//         T::Value: Debug,
-//     {...}
-//
-// Optionally, though this is not covered by the test suite, also accept
-// `debug(bound = "...")` attributes on individual fields. This should
-// substitute only whatever bounds are inferred based on that field's type,
-// without removing bounds inferred based on the other fields:
-//
-//     #[derive(CustomDebug)]
-//     pub struct Wrapper<T: Trait, U> {
-//         #[debug(bound = "T::Value: Debug")]
-//         field: Field<T>,
-//         normal: U,
-//     }
+// This test is written as a compile_fail test because our macro isn't yet
+// powerful enough to do anything useful. For example if we made it generate
+// something like a function, every one of those functions would have the same
+// name and the program would not compile.
 
-use derive_debug::CustomDebug;
-use std::fmt::Debug;
+use seq::seq;
 
-pub trait Trait {
-    type Value;
-}
+seq!(N in 0..4 {
+    compile_error!(concat!("error number ", stringify!(N)));
+});
 
-#[derive(CustomDebug)]
-#[debug(bound = "T::Value: Debug")]
-pub struct Wrapper<T: Trait> {
-    field: Field<T>,
-}
-
-#[derive(CustomDebug)]
-struct Field<T: Trait> {
-    values: Vec<T::Value>,
-}
-
-fn assert_debug<F: Debug>() {}
-
-fn main() {
-    struct Id;
-
-    impl Trait for Id {
-        type Value = u8;
-    }
-
-    assert_debug::<Wrapper<Id>>();
-}
+fn main() {}
