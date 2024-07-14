@@ -1,7 +1,7 @@
-use proc_macro2::{Group, TokenStream, TokenTree};
+use proc_macro2::{Group, Punct, Spacing, TokenStream, TokenTree};
 
-use quote::quote;
-use syn::{braced, parse::Parse, parse_macro_input, Token};
+use quote::{format_ident, quote};
+use syn::{braced, parse::Parse, parse_macro_input, Error, Token};
 
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -38,26 +38,53 @@ struct Seq {
 
 impl Seq {
     fn expand(&self, token_stream: &TokenStream, i: usize) -> syn::Result<TokenStream> {
-        let mut res = proc_macro2::TokenStream::new();
-        let tokens = token_stream.clone().into_iter().collect::<Vec<_>>();
+        let mut res: Vec<TokenTree> = vec![];
 
-        for token in tokens {
+        for token in token_stream.clone() {
             match token {
                 TokenTree::Group(group) => {
                     let stream = self.expand(&group.stream(), i)?;
                     let mut new_group = Group::new(group.delimiter(), stream);
+                    //Set the span, so the new stream know which line of code is wrong
                     new_group.set_span(group.span());
-                    res.extend(quote! {#new_group});
+                    res.push(TokenTree::Group(new_group));
                 }
-                TokenTree::Ident(ident) if ident == self.ident => {
-                    let i = proc_macro2::Literal::usize_unsuffixed(i);
-                    res.extend(quote! {#i});
-                }
-                _ => res.extend(quote! {#token}),
+                TokenTree::Ident(ident) if ident == self.ident => match res.last() {
+                    Some(TokenTree::Punct(punct)) if is_alone_tilde(punct) => {
+                        res.pop();
+                        let new_ident = if let Some(TokenTree::Ident(prefix)) = res.pop() {
+                            let mut new_ident = format_ident!("{}{}", prefix, i);
+                            new_ident.set_span(ident.span());
+                            new_ident
+                        } else {
+                            return Err(Error::new_spanned(
+                                &ident,
+                                format!("~{} required a prefix", ident),
+                            ));
+                        };
+
+                        res.push(TokenTree::Ident(new_ident));
+                    }
+                    _ => {
+                        let mut i = proc_macro2::Literal::usize_unsuffixed(i);
+                        i.set_span(ident.span());
+                        res.push(TokenTree::Literal(i));
+                    }
+                },
+                _ => res.push(token),
             }
         }
+
+        let res = res.into_iter().fold(TokenStream::new(), |mut acc, e| {
+            acc.extend(quote! {#e});
+            acc
+        });
         Ok(res)
     }
+}
+
+fn is_alone_tilde(punct: &Punct) -> bool {
+    punct.as_char() == '~' && punct.spacing() == Spacing::Alone
 }
 
 impl Parse for Seq {
