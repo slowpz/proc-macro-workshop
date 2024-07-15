@@ -1,5 +1,5 @@
-use std::ops::RangeInclusive;
 use proc_macro2::{Group, Punct, Spacing, TokenStream, TokenTree};
+use std::ops::RangeInclusive;
 
 use quote::{format_ident, quote};
 use syn::{braced, parse::Parse, parse_macro_input, Error, LitInt, Token};
