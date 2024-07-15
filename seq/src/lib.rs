@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::RangeInclusive;
 
 use proc_macro2::{Group, Punct, Spacing, TokenStream, TokenTree};
 
@@ -31,7 +31,7 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 struct Seq {
     ident: syn::Ident,
-    range: Range<usize>,
+    range: RangeInclusive<usize>,
     stream: proc_macro2::TokenStream,
     partially_repeat: bool,
 }
@@ -111,7 +111,7 @@ impl Seq {
         Ok(res)
     }
 
-    fn range(&self) -> Range<usize> {
+    fn range(&self) -> RangeInclusive<usize> {
         self.range.clone()
     }
 }
@@ -147,6 +147,7 @@ impl Parse for Seq {
         let _in_token = input.parse::<Token![in]>()?;
         let left: LitInt = input.parse()?;
         let _dot_dot = input.parse::<Token![..]>()?;
+        let inclusive = input.parse::<Option<Token![=]>>()?.is_some();
         let right: LitInt = input.parse()?;
 
         let left = match left.base10_parse::<usize>() {
@@ -164,7 +165,11 @@ impl Parse for Seq {
         let partially_repeat = contain_partially_repeat(&stream);
         Ok(Self {
             ident,
-            range: left..right,
+            range: if inclusive {
+                left..=right
+            } else {
+                left..=right.saturating_sub(1)
+            },
             stream,
             partially_repeat,
         })
