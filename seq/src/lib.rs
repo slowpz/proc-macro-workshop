@@ -1,5 +1,4 @@
 use std::ops::RangeInclusive;
-
 use proc_macro2::{Group, Punct, Spacing, TokenStream, TokenTree};
 
 use quote::{format_ident, quote};
@@ -65,7 +64,7 @@ impl Seq {
                         res.pop();
                         let new_ident = if let Some(TokenTree::Ident(prefix)) = res.pop() {
                             let mut new_ident = format_ident!("{}{}", prefix, i);
-                            new_ident.set_span(ident.span());
+                            new_ident.set_span(prefix.span());
                             new_ident
                         } else {
                             return Err(Error::new_spanned(
