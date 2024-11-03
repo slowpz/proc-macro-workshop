@@ -142,20 +142,25 @@ struct MatchVisiter {
 
 impl VisitMut for MatchVisiter {
     fn visit_expr_match_mut(&mut self, expr: &mut crate::ExprMatch) {
-        if !expr.attrs.iter().any(|attr| attr.path().is_ident("sorted")) {
+        let old_len = expr.attrs.len();
+        expr.attrs.retain(|attr| !attr.path().is_ident("sorted"));
+        if old_len == expr.attrs.len() {
             return;
         }
 
-        expr.attrs.retain(|attr| !attr.path().is_ident("sorted"));
 
-        let mut arm_names = Vec::with_capacity(expr.arms.len());
+        let mut arm_names: Vec<(String, &dyn ToTokens)> = Vec::with_capacity(expr.arms.len());
         for arm in expr.arms.iter() {
             match &arm.pat {
                 Pat::Path(pat) => arm_names.push((get_path_string(&pat.path), &pat.path)),
                 Pat::Struct(pat) => arm_names.push((get_path_string(&pat.path), &pat.path)),
                 Pat::TupleStruct(pat) => arm_names.push((get_path_string(&pat.path), &pat.path)),
+                Pat::Ident(pat_ident) => {
+                    arm_names.push((pat_ident.ident.to_string(), &pat_ident.ident))
+                }
+                Pat::Wild(wild) => arm_names.push(("_".to_string(), wild)),
                 _ => {
-                    self.res = Some(syn::Error::new(arm.span(), "sorted is not support"));
+                    self.res = Some(syn::Error::new(arm.span(), "unsupported by #[sorted]"));
                     return;
                 }
             }
