@@ -148,7 +148,6 @@ impl VisitMut for MatchVisiter {
             return;
         }
 
-
         let mut arm_names: Vec<(String, &dyn ToTokens)> = Vec::with_capacity(expr.arms.len());
         for arm in expr.arms.iter() {
             match &arm.pat {
