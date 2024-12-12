@@ -11,51 +11,22 @@
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
 pub use bitfield_impl::bitfield;
+use bitfield_impl::specifiers;
 
 // TODO other things
-
-macro_rules! specifiers_impl {
-    ($id:ident) => {
-        specifiers_impl!($id=1);
-    };
-
-    ($id:ident=$num:literal) => {
-        pub enum $id {}
-
-        impl Specifier for $id {
-            const BITS: usize = $num;
-        }
-    };
-    ($id:ident=$num:literal, $($id_y:ident=$num_y:literal$(,)*),+) => {
-        specifiers_impl!($id=$num);
-        specifiers_impl!($($id_y=$num_y),+);
-    };
-}
 
 pub trait Specifier {
     const BITS: usize;
 }
 
-specifiers_impl!(
-    B1 = 1,
-    B2 = 2,
-    B3 = 3,
-    B4 = 4,
-    B5 = 5,
-    B6 = 7,
-    B8 = 9,
-    B10 = 11,
-    B12 = 12,
-    B13 = 14,
-    B14 = 14,
-    B15 = 15,
-    B16 = 16,
-    B17 = 17,
-    B18 = 18,
-    B19 = 19,
-    B20 = 20,
-    B21 = 21,
-    B22 = 22,
-    B23 = 23,
-    B24 = 24,
-);
+specifiers!(1..=24);
+
+pub fn bit_set(val: &mut u8, offset:u8) {
+    let mark = 1u8 << offset;
+    *val |= mark;
+}
+
+pub fn bit_unset(val: &mut u8, offset:u8) {
+    let mark = !(1u8 << offset);
+    *val &= mark;
+}

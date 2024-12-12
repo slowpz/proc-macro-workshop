@@ -1,3 +1,5 @@
+mod gen;
+
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
@@ -33,41 +35,83 @@ fn struct_bitefield(item: syn::Item) -> syn::Result<TokenStream> {
                 }
             };
 
-            let getters = item.fields.iter().map(|f| {
-                let ident = match f.ident.as_ref() {
-                    Some(ident) => ident,
-                    None => {
-                        return syn::Error::new_spanned(f, "anyonymous filed is not support")
-                            .into_compile_error()
-                    }
-                };
+            let getters = {
+                let mut getters = vec![];
+                let mut offsets = vec![quote! { 0 }];
+                for f in &item.fields {
+                    match f.ident.as_ref() {
+                        Some(ident) => {
+                            let ty = &f.ty;
+                            let width = quote! { <#ty as bitfield::Specifier>::BITS };
+                            let fn_ident = format_ident!("get_{}", ident);
 
-                let fn_ident = format_ident!("get_{}", ident);
-                quote! {
-                    pub fn #fn_ident(&self) -> u64 {
-                        unimplemented!();
+                            getters.push(quote! {
+                                pub fn #fn_ident(&self) -> u64 {
+                                    const BIT_OFFSET_START: usize = #(#offsets)+*;
+                                    const BIT_OFFSET_END: usize = BIT_OFFSET_START + #width;
+                                    let mut val = 0u64;
+                                    for (shift,bit_idx) in (BIT_OFFSET_START..BIT_OFFSET_END).enumerate() {
+                                        // 方法：n>>k   等价于  n/(2^k)
+                                        let idx = bit_idx >> 3 as usize;
+                                        if (self.data[idx] & 1u8.rotate_left(bit_idx as u32)) != 0 {
+                                            val |= 1 << shift;
+                                        }
+                                    }
+                                    val
+                                }
+                            });
+
+                            offsets.push(width);
+                        }
+                        None => getters.push(
+                            syn::Error::new_spanned(f, "anyonymous filed is not support")
+                                .into_compile_error(),
+                        ),
                     }
                 }
-            });
 
-            
-            let setters = item.fields.iter().map(|f| {
-                let ident = match f.ident.as_ref() {
-                    Some(ident) => ident,
-                    None => {
-                        return syn::Error::new_spanned(f, "anyonymous filed is not support")
-                            .into_compile_error()
-                    }
-                };
+                getters
+            };
 
-                let fn_ident = format_ident!("set_{}", ident);
-                quote! {
-                    pub fn #fn_ident(&mut self, v: u64) {
-                        unimplemented!();
+            let setters = {
+                let mut setters = vec![];
+                let mut offsets = vec![quote! { 0 }];
+                for f in &item.fields {
+                    match f.ident.as_ref() {
+                        Some(ident) => {
+                            let ty = &f.ty;
+                            let width = quote! { <#ty as bitfield::Specifier>::BITS };
+                            let fn_ident = format_ident!("set_{}", ident);
+
+                            setters.push(quote! {
+                                pub fn #fn_ident(&mut self, val: u64) {
+                                    const BIT_OFFSET_START: usize = #(#offsets)+*;
+                                    const BIT_OFFSET_END: usize = BIT_OFFSET_START + #width;
+                                    let mut val = val;
+                                    for bit_idx in BIT_OFFSET_START..BIT_OFFSET_END {
+                                        // 方法：n>>k   等价于  n/(2^k)
+                                        let idx = bit_idx >> 3 as usize;
+                                        if val & 0b1 == 1 {
+                                            self.data[idx] |= 1u8.rotate_left(bit_idx as u32);
+                                         } else {
+                                            self.data[idx] &= !(1u8.rotate_left(bit_idx as u32));
+                                        }
+                                        val = val.rotate_right(1);
+                                    }
+                                }
+                            });
+
+                            offsets.push(width);
+                        }
+                        None => setters.push(
+                            syn::Error::new_spanned(f, "anyonymous filed is not support")
+                                .into_compile_error(),
+                        ),
                     }
                 }
-            });
 
+                setters
+            };
 
             Ok(quote! {
 
@@ -92,9 +136,12 @@ fn struct_bitefield(item: syn::Item) -> syn::Result<TokenStream> {
             }
             .into())
         }
-        _ => Err(syn::Error::new(
-            Span::call_site(),
-            "expected enum or match expression",
-        )),
+        _ => Err(syn::Error::new(Span::call_site(), "expected struct")),
     }
+}
+
+#[proc_macro]
+pub fn specifiers(input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as gen::Seq);
+    item.expand()
 }

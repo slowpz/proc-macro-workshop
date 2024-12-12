@@ -28,28 +28,37 @@ pub struct MyFourBytes {
     d: B24,
 }
 
-pub struct MyFourBytes1 {
-    a:[u8;4]
-}
-
-impl MyFourBytes1 {
-    pub fn set_a(&mut self, v:u64) {
-        let bytes = v.to_le_bytes();
-        self.a[0] |= bytes[0];
-    }
-}
-
-
 fn main() {
+    // let mut bitfield = MyFourBytes1::new();
+    // assert_eq!(0, bitfield.get_b());
+    // assert_eq!(0, bitfield.get_c());
+    // bitfield.set_b(6);
+    // bitfield.set_c(14);
+    // assert_eq!(6, bitfield.get_b());
+    // assert_eq!(14, bitfield.get_c());
+
+
     let mut bitfield = MyFourBytes::new();
     assert_eq!(0, bitfield.get_a());
     assert_eq!(0, bitfield.get_b());
     assert_eq!(0, bitfield.get_c());
     assert_eq!(0, bitfield.get_d());
 
+    bitfield.set_a(1);
+    println!("{:8b}", bitfield.data[0]);
     bitfield.set_c(14);
-    assert_eq!(0, bitfield.get_a());
-    assert_eq!(0, bitfield.get_b());
+    println!("{:8b}", bitfield.data[0]);
+    bitfield.set_b(7);
+    println!("{:8b}", bitfield.data[0]);
+    bitfield.set_d(246);
+    println!("{:8b}", bitfield.data[0]);
+    println!("{:8b}", bitfield.data[1]);
     assert_eq!(14, bitfield.get_c());
-    assert_eq!(0, bitfield.get_d());
+    assert_eq!(7, bitfield.get_b());
+    assert_eq!(1, bitfield.get_a());
+    assert_eq!(246, bitfield.get_d());
+
+    // for i in 8..32 {
+    //     println!("{}, {}", i >> u8::BITS, i / u8::BITS)
+    // }
 }
