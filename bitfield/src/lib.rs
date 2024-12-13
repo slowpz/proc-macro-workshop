@@ -17,16 +17,7 @@ use bitfield_impl::specifiers;
 
 pub trait Specifier {
     const BITS: usize;
+    type T;
 }
 
 specifiers!(1..=24);
-
-pub fn bit_set(val: &mut u8, offset:u8) {
-    let mark = 1u8 << offset;
-    *val |= mark;
-}
-
-pub fn bit_unset(val: &mut u8, offset:u8) {
-    let mark = !(1u8 << offset);
-    *val &= mark;
-}

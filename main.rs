@@ -1,64 +1,91 @@
-// Generate getters and setters that manipulate the right range of bits
-// corresponding to each field.
+// For some bitfield members, working with them as enums will make more sense to
+// the user than working with them as integers. We will require enums that have
+// a power-of-two number of variants so that they exhaustively cover a fixed
+// range of bits.
 //
+//     // Works like B3, but getter and setter signatures will use
+//     // the enum instead of u8.
+//     #[derive(BitfieldSpecifier)]
+//     enum DeliveryMode {
+//         Fixed = 0b000,
+//         Lowest = 0b001,
+//         SMI = 0b010,
+//         RemoteRead = 0b011,
+//         NMI = 0b100,
+//         Init = 0b101,
+//         Startup = 0b110,
+//         External = 0b111,
+//     }
 //
-//     ║  first byte   ║  second byte  ║  third byte   ║  fourth byte  ║
-//     ╟───────────────╫───────────────╫───────────────╫───────────────╢
-//     ║▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒ ▒║
-//     ╟─╫─────╫───────╫───────────────────────────────────────────────╢
-//     ║a║  b  ║   c   ║                       d                       ║
+// For this test case it is okay to require that every enum variant has an
+// explicit discriminant that is an integer literal. We will relax this
+// requirement in a later test case.
 //
+// Optionally if you are interested, come up with a way to support enums with a
+// number of variants that is not a power of two, but this is not necessary for
+// the test suite. Maybe there could be a #[bits = N] attribute that determines
+// the bit width of the specifier, and the getter (only for such enums) would
+// return Result<T, Unrecognized> with the raw value accessible through the
+// error type as u64:
 //
-// Depending on your implementation, it's possible that this will require adding
-// some associated types, associated constants, or associated functions to your
-// bitfield::Specifier trait next to the existing Specifier::BITS constant, but
-// it may not.
+//     #[derive(BitfieldSpecifier)]
+//     #[bits = 4]
+//     enum SmallPrime {
+//         Two = 0b0010,
+//         Three = 0b0011,
+//         Five = 0b0101,
+//         Seven = 0b0111,
+//         Eleven = 0b1011,
+//         Thirteen = 0b1101,
+//     }
 //
-// If it's easier for now, you can use u64 as the argument type for all the
-// setters and return type for all the getters. We will follow up with a more
-// precise signature in a later test case.
+//     ...
+//     let mut bitfield = MyBitfield::new();
+//     assert_eq!(0, bitfield.small_prime().unwrap_err().raw_value());
+//
+//     bitfield.set_small_prime(SmallPrime::Seven);
+//     let p = bitfield.small_prime().unwrap_or(SmallPrime::Two);
 
 use bitfield::*;
 
 #[bitfield]
-pub struct MyFourBytes {
-    a: B1,
-    b: B3,
-    c: B4,
-    d: B24,
+pub struct RedirectionTableEntry {
+    acknowledged: bool,
+    trigger_mode: TriggerMode,
+    delivery_mode: DeliveryMode,
+    reserved: B3,
+}
+
+#[derive(BitfieldSpecifier, Debug, PartialEq)]
+pub enum TriggerMode {
+    Edge = 0,
+    Level = 1,
+}
+
+#[derive(BitfieldSpecifier, Debug, PartialEq)]
+pub enum DeliveryMode {
+    Fixed = 0b000,
+    Lowest = 0b001,
+    SMI = 0b010,
+    RemoteRead = 0b011,
+    NMI = 0b100,
+    Init = 0b101,
+    Startup = 0b110,
+    External = 0b111,
 }
 
 fn main() {
-    // let mut bitfield = MyFourBytes1::new();
-    // assert_eq!(0, bitfield.get_b());
-    // assert_eq!(0, bitfield.get_c());
-    // bitfield.set_b(6);
-    // bitfield.set_c(14);
-    // assert_eq!(6, bitfield.get_b());
-    // assert_eq!(14, bitfield.get_c());
+    assert_eq!(std::mem::size_of::<RedirectionTableEntry>(), 1);
 
+    // Initialized to all 0 bits.
+    let mut entry = RedirectionTableEntry::new();
+    assert_eq!(entry.get_acknowledged(), false);
+    assert_eq!(entry.get_trigger_mode(), TriggerMode::Edge);
+    assert_eq!(entry.get_delivery_mode(), DeliveryMode::Fixed);
 
-    let mut bitfield = MyFourBytes::new();
-    assert_eq!(0, bitfield.get_a());
-    assert_eq!(0, bitfield.get_b());
-    assert_eq!(0, bitfield.get_c());
-    assert_eq!(0, bitfield.get_d());
-
-    bitfield.set_a(1);
-    println!("{:8b}", bitfield.data[0]);
-    bitfield.set_c(14);
-    println!("{:8b}", bitfield.data[0]);
-    bitfield.set_b(7);
-    println!("{:8b}", bitfield.data[0]);
-    bitfield.set_d(246);
-    println!("{:8b}", bitfield.data[0]);
-    println!("{:8b}", bitfield.data[1]);
-    assert_eq!(14, bitfield.get_c());
-    assert_eq!(7, bitfield.get_b());
-    assert_eq!(1, bitfield.get_a());
-    assert_eq!(246, bitfield.get_d());
-
-    // for i in 8..32 {
-    //     println!("{}, {}", i >> u8::BITS, i / u8::BITS)
-    // }
+    entry.set_acknowledged(true);
+    entry.set_delivery_mode(DeliveryMode::SMI);
+    assert_eq!(entry.get_acknowledged(), true);
+    assert_eq!(entry.get_trigger_mode(), TriggerMode::Edge);
+    assert_eq!(entry.get_delivery_mode(), DeliveryMode::SMI);
 }
