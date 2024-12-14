@@ -3,12 +3,12 @@ mod gen;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, Item};
+use syn::{parse_macro_input, spanned::Spanned, Item};
 
 #[proc_macro_attribute]
 pub fn bitfield(_: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as syn::Item);
-    match struct_bitefield(&item) {
+    match struct_bitfield(&item) {
         Ok(item) => item,
         Err(err) => {
             let mut err = err.to_compile_error();
@@ -18,7 +18,7 @@ pub fn bitfield(_: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-fn struct_bitefield(item: &syn::Item) -> syn::Result<TokenStream> {
+fn struct_bitfield(item: &syn::Item) -> syn::Result<TokenStream> {
     match item {
         Item::Struct(item) => {
             let vis = &item.vis;
@@ -95,23 +95,15 @@ fn getters_and_setters(
             match f.ident.as_ref() {
                 Some(ident) => {
                     let ty = &f.ty;
-                    let width = quote! { <#ty as bitfield::Specifier>::BITS };
-                    let ty =  quote! { <#ty as bitfield::Specifier>::T };
+                    let ty = quote! { <#ty as bitfield::Specifier> };
+                    let width = quote! { #ty::BITS };
+                    let assosiate_ty = quote! { #ty::T };
                     let fn_ident = format_ident!("get_{}", ident);
 
                     getters.push(quote! {
-                        pub fn #fn_ident(&self) -> #ty {
+                        pub fn #fn_ident(&self) -> #assosiate_ty {
                             const BIT_OFFSET_START: usize = #(#offsets)+*;
-                            const BIT_OFFSET_END: usize = BIT_OFFSET_START + #width;
-                            let mut val = 0;
-                            for (shift,bit_idx) in (BIT_OFFSET_START..BIT_OFFSET_END).enumerate() {
-                                // 方法：n>>k   等价于  n/(2^k)
-                                let idx = bit_idx >> 3 as usize;
-                                if (self.data[idx] & 1u8.rotate_left(bit_idx as u32)) != 0 {
-                                    val |= 1 << shift;
-                                }
-                            }
-                            val
+                            #ty::get(&self.data, BIT_OFFSET_START)
                         }
                     });
 
@@ -134,25 +126,15 @@ fn getters_and_setters(
             match f.ident.as_ref() {
                 Some(ident) => {
                     let ty = &f.ty;
-                    let width = quote! { <#ty as bitfield::Specifier>::BITS };
-                    let ty =  quote! { <#ty as bitfield::Specifier>::T };
+                    let ty = quote! { <#ty as bitfield::Specifier> };
+                    let width = quote! { #ty::BITS };
+                    let assosiate_ty = quote! { #ty::T };
                     let fn_ident = format_ident!("set_{}", ident);
 
                     setters.push(quote! {
-                        pub fn #fn_ident(&mut self, val: #ty) {
+                        pub fn #fn_ident(&mut self, val: #assosiate_ty) {
                             const BIT_OFFSET_START: usize = #(#offsets)+*;
-                            const BIT_OFFSET_END: usize = BIT_OFFSET_START + #width;
-                            let mut val = val;
-                            for bit_idx in BIT_OFFSET_START..BIT_OFFSET_END {
-                                // 方法：n>>k   等价于  n/(2^k)
-                                let idx = bit_idx >> 3 as usize;
-                                if val & 0b1 == 1 {
-                                    self.data[idx] |= 1u8.rotate_left(bit_idx as u32);
-                                 } else {
-                                    self.data[idx] &= !(1u8.rotate_left(bit_idx as u32));
-                                }
-                                val = val.rotate_right(1);
-                            }
+                            #ty::set(&mut self.data, BIT_OFFSET_START, val);
                         }
                     });
 
@@ -174,4 +156,103 @@ fn getters_and_setters(
 pub fn specifiers(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as gen::Seq);
     item.expand()
+}
+
+#[proc_macro_derive(BitfieldSpecifier)]
+pub fn bitfield_specifier(input: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(input as syn::Item);
+    match enum_specifier(&item) {
+        Ok(item) => item.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
+    match item {
+        Item::Enum(syn::ItemEnum {
+            ident, variants, ..
+        }) => {
+            let mut bits = 0u32;
+            let mut to_lit_match = vec![];
+            let mut to_enum_match = vec![];
+            for var in variants {
+                let lit = match &var.discriminant {
+                    Some((_, syn::Expr::Lit(syn::ExprLit { lit, .. }))) => lit,
+                    _ => {
+                        return Err(syn::Error::new(
+                            var.span(),
+                            "expected explicit discriminant value",
+                        ))
+                    }
+                };
+                bits = match lit {
+                    syn::Lit::Int(lit_int) => {
+                        let leading_zeros = lit_int.base10_parse::<u128>()?.leading_zeros();
+                        bits.max(u128::BITS - leading_zeros)
+                    }
+                    _ => {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "expected explicit discriminant value",
+                        ))
+                    }
+                };
+
+                let var_ident = &var.ident;
+                to_lit_match.push(quote! {
+                   Self::T::#var_ident => #lit
+                });
+
+                to_enum_match.push(quote! {
+                    #lit => Self::T::#var_ident
+                });
+            }
+
+            let bits = bits as usize;
+            
+            let to_lit_match = quote! {
+                match val {
+                    #(#to_lit_match),*
+                };
+            };
+
+            let to_enum_match = {
+                quote! {
+                    match lit {
+                        #(#to_enum_match),*,
+                        _ => panic!("Invalid value {}", lit)
+                    }
+                }
+            };
+
+            let val_getter = {
+                let ident = format_ident!("B{}", bits);
+                quote! { <#ident as bitfield::Specifier>::get(data, bit_offset) }
+            };
+
+            let val_setter = {
+                let ident = format_ident!("B{}", bits);
+                quote! { <#ident as bitfield::Specifier>::set(data, bit_offset, lit) }
+            };
+
+            Ok(quote! {
+                impl bitfield::Specifier for #ident {
+                    const BITS: usize = #bits;
+
+                    type T = #ident;
+
+                    fn set(data:&mut [u8], bit_offset: usize, val: Self::T) {
+                        let lit = #to_lit_match;
+                        #val_setter;
+                    }
+
+                    fn get(data:&[u8], bit_offset: usize) -> Self::T {
+                        let lit = #val_getter;
+                        #to_enum_match
+                    }
+                }
+            })
+        }
+        _ => Err(syn::Error::new(Span::call_site(), "expected Enum")),
+    }
 }

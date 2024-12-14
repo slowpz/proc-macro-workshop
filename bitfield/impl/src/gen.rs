@@ -18,6 +18,7 @@ impl Seq {
                 9..=16 => format_ident!("u16"),
                 17..=32 => format_ident!("u32"),
                 33..=64 => format_ident!("u64"),
+                65..=128 => format_ident!("u128"),
                 _ => {
                     return syn::Error::new(
                         Span::call_site(),
@@ -32,6 +33,34 @@ impl Seq {
                 impl Specifier for #ident {
                     const BITS: usize = #idx;
                     type T = #bites;
+
+                    fn get(data:&[u8], bit_offset: usize) -> Self::T {
+                        let bit_offset_end = bit_offset + Self::BITS;
+                        let mut val = 0;
+                        for (shift, bit_idx) in (bit_offset..bit_offset_end).enumerate() {
+                            // 方法：n>>k   等价于  n/(2^k)
+                            let idx = bit_idx >> 3 as usize;
+                            if (data[idx] & 1u8.rotate_left(bit_idx as u32)) != 0 {
+                                val |= 1 << shift;
+                            }
+                        }
+                        val
+                    }
+
+                    fn set(data:&mut [u8], bit_offset:usize, val: Self::T) {
+                        let bit_offset_end = bit_offset + Self::BITS;
+                        let mut val = val;
+                        for bit_idx in bit_offset..bit_offset_end {
+                            // 方法：n>>k   等价于  n/(2^k)
+                            let idx = bit_idx >> 3 as usize;
+                            if val & 0b1 == 1 {
+                                data[idx] |= 1u8.rotate_left(bit_idx as u32);
+                                } else {
+                                data[idx] &= !(1u8.rotate_left(bit_idx as u32));
+                            }
+                            val = val.rotate_right(1);
+                        }
+                    }
                 }
 
             }
@@ -63,7 +92,7 @@ impl Parse for Seq {
         };
         let right = match right.base10_parse::<usize>() {
             Ok(right) => {
-                if right <= u64::BITS as usize {
+                if right <= u128::BITS as usize {
                     right
                 } else {
                     return Err(Error::new(Span::call_site(), "rang must be in [1,64]"));

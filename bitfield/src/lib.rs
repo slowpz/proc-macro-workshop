@@ -10,14 +10,38 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-pub use bitfield_impl::bitfield;
 use bitfield_impl::specifiers;
+pub use bitfield_impl::{bitfield, BitfieldSpecifier};
 
 // TODO other things
 
 pub trait Specifier {
     const BITS: usize;
     type T;
+
+    fn get(data: &[u8], bit_offset: usize) -> Self::T;
+
+    fn set(data: &mut [u8], bit_offset: usize, val: Self::T);
+}
+
+impl Specifier for bool {
+    const BITS: usize = 1;
+
+    type T = bool;
+
+    fn get(data: &[u8], bit_offset: usize) -> Self::T {
+        let idx = bit_offset >> 3;
+        data[idx] & 1u8.rotate_left(bit_offset as u32) != 0
+    }
+
+    fn set(data: &mut [u8], bit_offset: usize, val: Self::T) {
+        let idx = bit_offset >> 3;
+        if val {
+            data[idx] |= 1u8.rotate_left(bit_offset as u32);
+        } else {
+            data[idx] &= !(1u8.rotate_left(bit_offset as u32));
+        }
+    }
 }
 
 specifiers!(1..=24);
