@@ -2,8 +2,8 @@ mod gen;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, Item};
+use quote::{format_ident, quote, quote_spanned, ToTokens};
+use syn::{parse_macro_input, spanned::Spanned, Item};
 
 #[proc_macro_attribute]
 pub fn bitfield(_: TokenStream, input: TokenStream) -> TokenStream {
@@ -37,6 +37,7 @@ fn struct_bitfield(item: &syn::Item) -> syn::Result<TokenStream> {
 
             let (getters, setters) = getters_and_setters(item);
             let size_check = check_size_is_multiple_of_eights(item);
+            let field_bits_check = check_filed_bits(item)?;
 
             Ok(quote! {
 
@@ -60,7 +61,7 @@ fn struct_bitfield(item: &syn::Item) -> syn::Result<TokenStream> {
                     #(#setters)*
                 }
 
-
+                #field_bits_check
             }
             .into())
         }
@@ -83,6 +84,53 @@ fn check_size_is_multiple_of_eights(item: &syn::ItemStruct) -> proc_macro2::Toke
             }
         };
     }
+}
+
+fn check_filed_bits(item: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStream> {
+    let mut checks = vec![];
+    for f in &item.fields {
+        for att in &f.attrs {
+            let val = match &att.meta {
+                syn::Meta::NameValue(val) => val,
+                _ => continue,
+            };
+
+            if !val.path.is_ident("bits") {
+                continue;
+            };
+
+            let expr_lit = match &val.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(lit_int),
+                    ..
+                }) => lit_int,
+                _ => {
+                    return Err(syn::Error::new(
+                        val.value.span(),
+                        "required integer literal",
+                    ));
+                }
+            };
+
+            let type_bits = {
+                let ty = &f.ty;
+
+                quote! {
+                    <#ty as bitfield::Specifier>::BITS
+                }
+            };
+
+            let check = quote_spanned! { expr_lit.span() =>
+               const _:[u8;#expr_lit] = [0;#type_bits];
+            };
+
+            checks.push(check);
+        }
+    }
+
+    Ok(quote! {
+        #(#checks)*
+    })
 }
 
 fn getters_and_setters(
@@ -230,8 +278,7 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
     }
 }
 
-
-fn check_discriminant(en : &syn::ItemEnum) -> proc_macro2::TokenStream {
+fn check_discriminant(en: &syn::ItemEnum) -> proc_macro2::TokenStream {
     let bits = usize::BITS - (en.variants.len() - 1).leading_zeros();
     let discriminant_type = {
         let ty = format_ident!("B{}", bits);
@@ -242,15 +289,13 @@ fn check_discriminant(en : &syn::ItemEnum) -> proc_macro2::TokenStream {
         let ident = format_ident!("a{}", idx);
         let var_ident = &e.ident;
         let str = format!("{}::{} discriminant value out of range, expect range [0,{})", enum_ident, var_ident, en.variants.len());
-        quote! {  
+        quote_spanned! { e.span() => 
             let #ident = TYPE_BITS - (#enum_ident::#var_ident as #discriminant_type).leading_zeros();
             if EXPECT_BITS < #ident {
                 panic!(#str);
             }
         }
     });
-
- 
 
     quote! {
         const _: () =  {

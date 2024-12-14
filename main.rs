@@ -17,9 +17,4 @@ pub enum DeliveryMode {
     External,
 }
 
-fn main() {
-    let a = 8usize;
-    println!("{}", 3f32.log2());
-    println!("{}", DeliveryMode::External as u8);
-    println!("{}", DeliveryMode::External as u8);
-}
+fn main() {}
