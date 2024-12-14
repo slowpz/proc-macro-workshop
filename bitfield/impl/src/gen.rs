@@ -55,7 +55,7 @@ impl Seq {
                             let idx = bit_idx >> 3 as usize;
                             if val & 0b1 == 1 {
                                 data[idx] |= 1u8.rotate_left(bit_idx as u32);
-                                } else {
+                            } else {
                                 data[idx] &= !(1u8.rotate_left(bit_idx as u32));
                             }
                             val = val.rotate_right(1);

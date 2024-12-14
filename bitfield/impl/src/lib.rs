@@ -169,9 +169,9 @@ pub fn bitfield_specifier(input: TokenStream) -> TokenStream {
 
 fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
     match item {
-        Item::Enum(syn::ItemEnum {
-            ident, variants, ..
-        }) => {
+        Item::Enum(en) => {
+            let ident = &en.ident;
+            let variants = &en.variants;
             if variants.len() % 2 != 0 {
                 return Err(syn::Error::new(
                     Span::call_site(),
@@ -179,7 +179,10 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
                 ));
             }
 
-            let bits = (usize::BITS - (variants.len() - 1).leading_zeros()) as usize;
+            let bits = {
+                let len = variants.len() as f32;
+                f32::ceil(len.log2()) as usize
+            };
             let bit_ident = {
                 let ident = format_ident!("B{}", bits);
                 quote! { <#ident as bitfield::Specifier>}
@@ -195,8 +198,12 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
                 let enums = enums.clone();
                 quote! { [#(#enums as u8),*] }
             };
+            let check_discriminant = check_discriminant(en);
 
             Ok(quote! {
+
+                #check_discriminant
+
                 impl bitfield::Specifier for #ident {
                     const BITS: usize = #bits;
 
@@ -220,5 +227,37 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
             })
         }
         _ => Err(syn::Error::new(Span::call_site(), "expected Enum")),
+    }
+}
+
+
+fn check_discriminant(en : &syn::ItemEnum) -> proc_macro2::TokenStream {
+    let bits = usize::BITS - (en.variants.len() - 1).leading_zeros();
+    let discriminant_type = {
+        let ty = format_ident!("B{}", bits);
+        quote! { <#ty as bitfield::Specifier>::T }
+    };
+    let enum_ident = &en.ident;
+    let discriminants = en.variants.iter().enumerate().map(|(idx, e)| {
+        let ident = format_ident!("a{}", idx);
+        let var_ident = &e.ident;
+        let str = format!("{}::{} discriminant value out of range, expect range [0,{})", enum_ident, var_ident, en.variants.len());
+        quote! {  
+            let #ident = TYPE_BITS - (#enum_ident::#var_ident as #discriminant_type).leading_zeros();
+            if EXPECT_BITS < #ident {
+                panic!(#str);
+            }
+        }
+    });
+
+ 
+
+    quote! {
+        const _: () =  {
+            const TYPE_BITS: u32 = #discriminant_type::BITS;
+            const EXPECT_BITS: u32 = #bits;
+
+            #(#discriminants)*
+        };
     }
 }

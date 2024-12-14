@@ -44,4 +44,4 @@ impl Specifier for bool {
     }
 }
 
-specifiers!(1..=24);
+specifiers!(1..=128);
