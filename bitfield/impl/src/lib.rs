@@ -3,7 +3,7 @@ mod gen;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, spanned::Spanned, Item};
+use syn::{parse_macro_input, Item};
 
 #[proc_macro_attribute]
 pub fn bitfield(_: TokenStream, input: TokenStream) -> TokenStream {
@@ -172,67 +172,28 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
         Item::Enum(syn::ItemEnum {
             ident, variants, ..
         }) => {
-            let mut bits = 0u32;
-            let mut to_lit_match = vec![];
-            let mut to_enum_match = vec![];
-            for var in variants {
-                let lit = match &var.discriminant {
-                    Some((_, syn::Expr::Lit(syn::ExprLit { lit, .. }))) => lit,
-                    _ => {
-                        return Err(syn::Error::new(
-                            var.span(),
-                            "expected explicit discriminant value",
-                        ))
-                    }
-                };
-                bits = match lit {
-                    syn::Lit::Int(lit_int) => {
-                        let leading_zeros = lit_int.base10_parse::<u128>()?.leading_zeros();
-                        bits.max(u128::BITS - leading_zeros)
-                    }
-                    _ => {
-                        return Err(syn::Error::new(
-                            lit.span(),
-                            "expected explicit discriminant value",
-                        ))
-                    }
-                };
-
-                let var_ident = &var.ident;
-                to_lit_match.push(quote! {
-                   Self::T::#var_ident => #lit
-                });
-
-                to_enum_match.push(quote! {
-                    #lit => Self::T::#var_ident
-                });
+            if variants.len() % 2 != 0 {
+                return Err(syn::Error::new(
+                    Span::call_site(),
+                    "BitfieldSpecifier expected a number of variants which is a power of 2",
+                ));
             }
 
-            let bits = bits as usize;
-            
-            let to_lit_match = quote! {
-                match val {
-                    #(#to_lit_match),*
-                };
-            };
-
-            let to_enum_match = {
-                quote! {
-                    match lit {
-                        #(#to_enum_match),*,
-                        _ => panic!("Invalid value {}", lit)
-                    }
-                }
-            };
-
-            let val_getter = {
+            let bits = (usize::BITS - (variants.len() - 1).leading_zeros()) as usize;
+            let bit_ident = {
                 let ident = format_ident!("B{}", bits);
-                quote! { <#ident as bitfield::Specifier>::get(data, bit_offset) }
+                quote! { <#ident as bitfield::Specifier>}
             };
+            let val_getter = quote! { #bit_ident::get(data, bit_offset) };
+            let val_setter = quote! { #bit_ident::set(data, bit_offset, lit) };
+            let enums = variants.iter().map(|v| {
+                let ident = &v.ident;
+                quote! { Self::T::#ident }
+            });
 
-            let val_setter = {
-                let ident = format_ident!("B{}", bits);
-                quote! { <#ident as bitfield::Specifier>::set(data, bit_offset, lit) }
+            let enum_u8s = {
+                let enums = enums.clone();
+                quote! { [#(#enums as u8),*] }
             };
 
             Ok(quote! {
@@ -242,13 +203,18 @@ fn enum_specifier(item: &syn::Item) -> syn::Result<proc_macro2::TokenStream> {
                     type T = #ident;
 
                     fn set(data:&mut [u8], bit_offset: usize, val: Self::T) {
-                        let lit = #to_lit_match;
+                        let lit = val as #bit_ident::T;
                         #val_setter;
                     }
 
                     fn get(data:&[u8], bit_offset: usize) -> Self::T {
                         let lit = #val_getter;
-                        #to_enum_match
+                        #enum_u8s
+                        .into_iter()
+                        .zip([#(#enums),*])
+                        .find(|(val, _)| {
+                            val == &lit
+                        }).unwrap().1
                     }
                 }
             })
